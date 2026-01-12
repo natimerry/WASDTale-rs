@@ -14,11 +14,6 @@ const MAGIC_NTMR: usize = 0x4E544D52;
 static mut KEYBOARD_HOOK: HHOOK = 0;
 static mut UNDERTALE_HWND: HWND = 0;
 
-static mut SUPPRESS_W: bool = false;
-static mut SUPPRESS_A: bool = false;
-static mut SUPPRESS_S: bool = false;
-static mut SUPPRESS_D: bool = false;
-
 type LoadLibraryWFn = unsafe extern "system" fn(*const u16) -> *mut c_void;
 type SleepFn = unsafe extern "system" fn(u32);
 
@@ -35,11 +30,9 @@ type GetMessageAFn = unsafe extern "system" fn(*mut MSG, HWND, u32, u32) -> BOOL
 type TranslateMessageFn = unsafe extern "system" fn(*const MSG) -> BOOL;
 type DispatchMessageAFn = unsafe extern "system" fn(*const MSG) -> LRESULT;
 
-
 static mut SEND_INPUT: Option<SendInputFn> = None;
 static mut CALL_NEXT_HOOK_EX: Option<CallNextHookExFn> = None;
 static mut GET_FOREGROUND_WINDOW: Option<GetForegroundWindowFn> = None;
-
 
 unsafe fn send_key(vk: u16, down: bool) {
     unsafe {
@@ -54,6 +47,15 @@ unsafe fn send_key(vk: u16, down: bool) {
 }
 
 unsafe extern "system" fn keyboard_proc(code: i32, wParam: WPARAM, lParam: LPARAM) -> LRESULT {
+    static mut SUPPRESS_W: bool = false;
+    static mut SUPPRESS_A: bool = false;
+    static mut SUPPRESS_S: bool = false;
+    static mut SUPPRESS_D: bool = false;
+
+    static mut SUPPRESS_SPACE: bool = false;
+
+    static mut SUPPRESS_E: bool = false;
+
     unsafe {
         if code >= 0 {
             let kb = &*(lParam as *const KBDLLHOOKSTRUCT);
@@ -70,6 +72,11 @@ unsafe extern "system" fn keyboard_proc(code: i32, wParam: WPARAM, lParam: LPARA
                 const VK_A: u32 = b'A' as u32;
                 const VK_S: u32 = b'S' as u32;
                 const VK_D: u32 = b'D' as u32;
+                const VK_X: u32 = b'X' as u32;
+
+                const VK_SPACE: u32 = 32;
+
+                const VK_E: u32 = b'E' as u32;
 
                 match kb.vkCode {
                     VK_W => {
@@ -108,6 +115,25 @@ unsafe extern "system" fn keyboard_proc(code: i32, wParam: WPARAM, lParam: LPARA
                             send_key(VK_RIGHT as u16, false);
                         }
                     }
+                    VK_SPACE => {
+                        if is_down && !SUPPRESS_SPACE {
+                            SUPPRESS_SPACE = true;
+                            send_key(VK_X as u16, true);
+                        } else if is_up && SUPPRESS_SPACE {
+                            SUPPRESS_SPACE = false;
+                            send_key(VK_X as u16, false);
+                        }
+                    }
+
+                    VK_E => {
+                        if is_down && !SUPPRESS_E {
+                            SUPPRESS_E = true;
+                            send_key(VK_Z as u16, true);
+                        } else if is_up && SUPPRESS_E {
+                            SUPPRESS_E = false;
+                            send_key(VK_Z as u16, false);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -131,7 +157,6 @@ unsafe fn get_export<F: Copy>(name: &str, dll_base: usize, dll_name: &str) -> F 
 
 fn main() {
     unsafe {
-
         // Your main code
         let kernel32 = find_dll_base_with_log("KERNEL32.DLL");
 
@@ -159,7 +184,6 @@ fn main() {
         let DispatchMessageA: DispatchMessageAFn =
             get_export("DispatchMessageA", user32 as usize, "user32");
 
-
         let mut has_been_printed = false;
         loop {
             if !has_been_printed {
@@ -185,7 +209,7 @@ fn main() {
             println!("Failed to set windows keyboard hook");
             return;
         }
-        
+
         println!("done");
         let mut msg: MSG = core::mem::zeroed();
         while GetMessageA(&mut msg, 0, 0, 0) > 0 {
