@@ -3,6 +3,7 @@ name = "WASDTale-rs"
 version = "1.0.0"
 edition = "2024"
 authors = ["natimerry"]
+repository = "https://github.com/natimerry/WASDTale-rs"
 
 [dependencies]
 libwinexploit = { git = "https://github.com/natimerry/libwinexploit", rev = "ce84b49913af071f59f5ff8a3ca9a953e8246f24"  }
