@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "WASDTale-rs"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "libwinexploit",
  "windows-sys 0.52.0",
@@ -19,7 +19,7 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 [[package]]
 name = "libwinexploit"
 version = "0.1.0"
-source = "git+https://github.com/natimerry/libwinexploit?rev=ce84b49913af071f59f5ff8a3ca9a953e8246f24#ce84b49913af071f59f5ff8a3ca9a953e8246f24"
+source = "git+https://github.com/natimerry/libwinexploit?rev=fd98d995c65244b439f2fb79b0576f445e747ce3#fd98d995c65244b439f2fb79b0576f445e747ce3"
 dependencies = [
  "byteorder",
  "thiserror",
