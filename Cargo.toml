@@ -1,0 +1,14 @@
+[package]
+name = "WASDTaleRS"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+byteorder = "1.5.0"
+libwinexploit = { git = "https://github.com/natimerry/libwinexploit", rev = "ce84b49913af071f59f5ff8a3ca9a953e8246f24"  }
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
