@@ -2,9 +2,15 @@
 
 use core::ffi::c_void;
 use core::ptr::null;
+use std::collections::HashMap;
 use libwinexploit::runtime::exports::{find_dll_base, find_dll_export};
 use std::ffi::CString;
+use std::fs;
+use std::fs::File;
+use std::io::Write;
 use std::mem::transmute_copy;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use windows_sys::w;
 
 use windows_sys::Win32::Foundation::*;
@@ -34,6 +40,10 @@ static mut SEND_INPUT: Option<SendInputFn> = None;
 static mut CALL_NEXT_HOOK_EX: Option<CallNextHookExFn> = None;
 static mut GET_FOREGROUND_WINDOW: Option<GetForegroundWindowFn> = None;
 
+
+static KEYMAP: OnceLock<HashMap<u32, u16>> = OnceLock::new();
+static SUPPRESS: OnceLock<[AtomicBool; 256]> = OnceLock::new();
+
 unsafe fn send_key(vk: u16, down: bool) {
     unsafe {
         let mut input: INPUT = core::mem::zeroed();
@@ -46,99 +56,222 @@ unsafe fn send_key(vk: u16, down: bool) {
     }
 }
 
-unsafe extern "system" fn keyboard_proc(code: i32, wParam: WPARAM, lParam: LPARAM) -> LRESULT {
-    static mut SUPPRESS_W: bool = false;
-    static mut SUPPRESS_A: bool = false;
-    static mut SUPPRESS_S: bool = false;
-    static mut SUPPRESS_D: bool = false;
+const DEFAULT_KEY_BYTES: &[u8] = include_bytes!("../keys.default.txt");
+fn load_keymap() {
+    println!("Loading keymap");
+    let keys_path = std::env::current_exe().unwrap().with_file_name("keys.txt");
 
-    static mut SUPPRESS_SPACE: bool = false;
+    if !keys_path.exists() {
+        println!("Creating default keymap");
+        File::create(&keys_path).unwrap().write_all(DEFAULT_KEY_BYTES).unwrap();
+    }
 
-    static mut SUPPRESS_E: bool = false;
+    let text = fs::read_to_string(keys_path)
+        .expect("failed to read keys.txt");
 
-    unsafe {
-        if code >= 0 {
-            let kb = &*(lParam as *const KBDLLHOOKSTRUCT);
+    let mut map: HashMap<u32, u16> = HashMap::new();
 
-            if kb.dwExtraInfo == MAGIC_NTMR {
-                return (CALL_NEXT_HOOK_EX.unwrap())(KEYBOARD_HOOK, code, wParam, lParam);
-            }
+    for (lineno, line) in text.lines().enumerate() {
+        let line = line.trim();
 
-            if (GET_FOREGROUND_WINDOW.unwrap())() == UNDERTALE_HWND {
-                let is_down = wParam == WM_KEYDOWN as usize || wParam == WM_SYSKEYDOWN as usize;
-                let is_up = wParam == WM_KEYUP as usize || wParam == WM_SYSKEYUP as usize;
-
-                const VK_W: u32 = b'W' as u32;
-                const VK_A: u32 = b'A' as u32;
-                const VK_S: u32 = b'S' as u32;
-                const VK_D: u32 = b'D' as u32;
-                const VK_X: u32 = b'X' as u32;
-
-                const VK_SPACE: u32 = 32;
-
-                const VK_E: u32 = b'E' as u32;
-
-                match kb.vkCode {
-                    VK_W => {
-                        if is_down && !SUPPRESS_W {
-                            SUPPRESS_W = true;
-                            send_key(VK_UP as u16, true);
-                        } else if is_up && SUPPRESS_W {
-                            SUPPRESS_W = false;
-                            send_key(VK_UP as u16, false);
-                        }
-                    }
-                    VK_A => {
-                        if is_down && !SUPPRESS_A {
-                            SUPPRESS_A = true;
-                            send_key(VK_LEFT as u16, true);
-                        } else if is_up && SUPPRESS_A {
-                            SUPPRESS_A = false;
-                            send_key(VK_LEFT as u16, false);
-                        }
-                    }
-                    VK_S => {
-                        if is_down && !SUPPRESS_S {
-                            SUPPRESS_S = true;
-                            send_key(VK_DOWN as u16, true);
-                        } else if is_up && SUPPRESS_S {
-                            SUPPRESS_S = false;
-                            send_key(VK_DOWN as u16, false);
-                        }
-                    }
-                    VK_D => {
-                        if is_down && !SUPPRESS_D {
-                            SUPPRESS_D = true;
-                            send_key(VK_RIGHT as u16, true);
-                        } else if is_up && SUPPRESS_D {
-                            SUPPRESS_D = false;
-                            send_key(VK_RIGHT as u16, false);
-                        }
-                    }
-                    VK_SPACE => {
-                        if is_down && !SUPPRESS_SPACE {
-                            SUPPRESS_SPACE = true;
-                            send_key(VK_X as u16, true);
-                        } else if is_up && SUPPRESS_SPACE {
-                            SUPPRESS_SPACE = false;
-                            send_key(VK_X as u16, false);
-                        }
-                    }
-
-                    VK_E => {
-                        if is_down && !SUPPRESS_E {
-                            SUPPRESS_E = true;
-                            send_key(VK_Z as u16, true);
-                        } else if is_up && SUPPRESS_E {
-                            SUPPRESS_E = false;
-                            send_key(VK_Z as u16, false);
-                        }
-                    }
-                    _ => {}
-                }
-            }
+        // Skip empty lines / comments
+        if line.is_empty() || line.starts_with('#') {
+            continue;
         }
-        (CALL_NEXT_HOOK_EX.unwrap())(KEYBOARD_HOOK, code, wParam, lParam)
+
+        let (src, dst) = line
+            .split_once(char::is_whitespace)
+            .unwrap_or_else(|| {
+                panic!("keys.txt:{} invalid format (expected: SRC DST)", lineno + 1)
+            });
+
+        let src_vk = vk_from_name(src)
+            .unwrap_or_else(|| {
+                panic!("keys.txt:{} invalid source key `{}`", lineno + 1, src)
+            });
+
+        let dst_vk = vk_from_name(dst)
+            .unwrap_or_else(|| {
+                panic!("keys.txt:{} invalid target key `{}`", lineno + 1, dst)
+            });
+
+        if src_vk >= 256 {
+            panic!(
+                "keys.txt:{} source VK {} out of range (0–255)",
+                lineno + 1,
+                src_vk
+            );
+        }
+
+        println!(
+            "MAPPED {src} ({:#04X}) -> {dst} ({:#04X})",
+            src_vk,
+            dst_vk
+        );
+
+        map.insert(src_vk, dst_vk as u16);
+    }
+    // Install keymap
+    KEYMAP.set(map)
+        .expect("KEYMAP already initialized");
+
+    // Initialize suppression flags (one per VK)
+    SUPPRESS.set(std::array::from_fn(|_| AtomicBool::new(false)))
+        .expect("SUPPRESS already initialized");
+}
+
+fn vk_from_name(name: &str) -> Option<u32> {
+    let s = name.trim().to_uppercase();
+
+    if let Some(hex) = s.strip_prefix("0X") {
+        if let Ok(v) = u32::from_str_radix(hex, 16) {
+            return Some(v);
+        }
+    }
+
+    if let Ok(v) = s.parse::<u32>() {
+        return Some(v);
+    }
+
+    if s.len() == 1 {
+        let b = s.as_bytes()[0];
+        if b.is_ascii_alphanumeric() {
+            return Some(b as u32);
+        }
+    }
+
+    Some(match s.as_str() {
+        "BACKSPACE" => VK_BACK as u32,
+        "TAB" => VK_TAB as u32,
+        "ENTER" | "RETURN" => VK_RETURN as u32,
+        "SHIFT" => VK_SHIFT as u32,
+        "CTRL" | "CONTROL" => VK_CONTROL as u32,
+        "ALT" => VK_MENU as u32,
+        "ESC" | "ESCAPE" => VK_ESCAPE as u32,
+        "SPACE" => VK_SPACE as u32,
+
+        "LEFT" => VK_LEFT as u32,
+        "UP" => VK_UP as u32,
+        "RIGHT" => VK_RIGHT as u32,
+        "DOWN" => VK_DOWN as u32,
+
+        "INSERT" => VK_INSERT as u32,
+        "DELETE" => VK_DELETE as u32,
+        "HOME" => VK_HOME as u32,
+        "END" => VK_END as u32,
+        "PAGEUP" => VK_PRIOR as u32,
+        "PAGEDOWN" => VK_NEXT as u32,
+
+        "F1" => VK_F1 as u32,
+        "F2" => VK_F2 as u32,
+        "F3" => VK_F3 as u32,
+        "F4" => VK_F4 as u32,
+        "F5" => VK_F5 as u32,
+        "F6" => VK_F6 as u32,
+        "F7" => VK_F7 as u32,
+        "F8" => VK_F8 as u32,
+        "F9" => VK_F9 as u32,
+        "F10" => VK_F10 as u32,
+        "F11" => VK_F11 as u32,
+        "F12" => VK_F12 as u32,
+
+        "LMB" | "MOUSE1" | "LBUTTON" => VK_LBUTTON as u32,
+        "RMB" | "MOUSE2" | "RBUTTON" => VK_RBUTTON as u32,
+        "MMB" | "MOUSE3" | "MBUTTON" => VK_MBUTTON as u32,
+        "MOUSE4" | "XBUTTON1" => VK_XBUTTON1 as u32,
+        "MOUSE5" | "XBUTTON2" => VK_XBUTTON2 as u32,
+
+        _ => return None,
+    })
+}
+
+unsafe extern "system" fn keyboard_proc(
+    code: i32,
+    wParam: WPARAM,
+    lParam: LPARAM,
+) -> LRESULT {
+    unsafe {
+        if code < 0 {
+            return CALL_NEXT_HOOK_EX.unwrap()(
+                KEYBOARD_HOOK,
+                code,
+                wParam,
+                lParam,
+            );
+        }
+
+        let kb = &*(lParam as *const KBDLLHOOKSTRUCT);
+        if kb.dwExtraInfo == MAGIC_NTMR {
+            return CALL_NEXT_HOOK_EX.unwrap()(
+                KEYBOARD_HOOK,
+                code,
+                wParam,
+                lParam,
+            );
+        }
+
+        // Only act when Undertale is focused
+        if GET_FOREGROUND_WINDOW.unwrap()() != UNDERTALE_HWND {
+            return CALL_NEXT_HOOK_EX.unwrap()(
+                KEYBOARD_HOOK,
+                code,
+                wParam,
+                lParam,
+            );
+        }
+
+        let is_down = wParam == WM_KEYDOWN as usize
+            || wParam == WM_SYSKEYDOWN as usize;
+        let is_up = wParam == WM_KEYUP as usize
+            || wParam == WM_SYSKEYUP as usize;
+
+        let keymap = match KEYMAP.get() {
+            Some(m) => m,
+            None => {
+                return CALL_NEXT_HOOK_EX.unwrap()(
+                    KEYBOARD_HOOK,
+                    code,
+                    wParam,
+                    lParam,
+                );
+            }
+        };
+
+        let out_vk = match keymap.get(&kb.vkCode) {
+            Some(&vk) => vk,
+            None => {
+                return CALL_NEXT_HOOK_EX.unwrap()(
+                    KEYBOARD_HOOK,
+                    code,
+                    wParam,
+                    lParam,
+                );
+            }
+        };
+
+        let suppress = SUPPRESS.get().unwrap();
+        let flag = &suppress[kb.vkCode as usize];
+
+        if is_down {
+            if !flag.swap(true, Ordering::SeqCst) {
+                send_key(out_vk, true);
+            }
+            return 1; // swallow original
+        }
+
+        if is_up {
+            if flag.swap(false, Ordering::SeqCst) {
+                send_key(out_vk, false);
+            }
+            return 1; // swallow original
+        }
+
+        CALL_NEXT_HOOK_EX.unwrap()(
+            KEYBOARD_HOOK,
+            code,
+            wParam,
+            lParam,
+        )
     }
 }
 
@@ -156,6 +289,7 @@ unsafe fn get_export<F: Copy>(name: &str, dll_base: usize, dll_name: &str) -> F 
 }
 
 fn main() {
+
     unsafe {
         // Your main code
         let kernel32 = find_dll_base_with_log("KERNEL32.DLL");
@@ -197,6 +331,7 @@ fn main() {
             if local_hwnd != 0 {
                 UNDERTALE_HWND = local_hwnd;
                 println!("Found UNDERTALE.exe with HWND: {:#x}", local_hwnd);
+                load_keymap();
                 break;
             }
             Sleep(1000);
