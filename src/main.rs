@@ -20,7 +20,11 @@ static mut UNDERTALE_HWND: HWND = 0;
 static KEYMAP: OnceLock<HashMap<u32, u16>> = OnceLock::new();
 static SUPPRESS: OnceLock<[AtomicBool; 256]> = OnceLock::new();
 
-use libwinexploit::winapi::{self, LPINPUT};
+#[cfg(target_arch = "x86_64")]
+use libwinexploit::winapi::{self as winapi, LPINPUT};
+
+#[cfg(target_arch = "aarch64")]
+use libwinexploit::winapi::{LPINPUT, raw as winapi};
 
 unsafe fn send_key(vk: u16, down: bool) {
     unsafe {
