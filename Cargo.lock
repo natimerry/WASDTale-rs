@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "WASDTale-rs"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "libwinexploit",
  "windows-sys 0.52.0",
