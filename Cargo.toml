@@ -6,7 +6,7 @@ authors = ["natimerry"]
 repository = "https://github.com/natimerry/WASDTale-rs"
 
 [dependencies]
-libwinexploit = { git = "https://github.com/natimerry/libwinexploit", rev = "fd98d995c65244b439f2fb79b0576f445e747ce3"  }
+libwinexploit = { git = "https://github.com/natimerry/libwinexploit", rev = "064d0d1393577966adcd300dbcd7b8e6c6ca1142" ,features= ["obfuscation","runtime"] }
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
